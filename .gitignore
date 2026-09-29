@@ -1,0 +1,32 @@
+# 构建产物
+target/
+*.class
+
+# IDE 配置（不含 workspace.xml —— 那是 IDEA 自己生成的，见 .idea/.gitignore）
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+
+# classpath 导出（`mvn dependency:build-classpath` 生成的，跑 probes/ 用；绝对路径 → 不该入库）
+cp.txt
+
+# 日志
+*.log
+
+# ⚠️ 不要忽略整个 .mvn/ —— jvm.config 是**项目配置**，应该进仓库
+#    只忽略 wrapper 的 jar（那是二进制，按惯例不入库；真要固定版本才提交）
+.mvn/wrapper/maven-wrapper.jar
+
+# 凭据（公开仓库红线：明文 Key 一律不得提交）
+#   两个摆放位置都忽略：
+#     ① java/.env     —— 独立仓库形态（README 快速开始用这个）
+#     ② week7/.env    —— 本地学习仓库形态（java/ 嵌在 week7/ 里时，由 week7/.gitignore 兜）
+.env
+.env.local
+*.key
+*.pem
+
+# ⚠️ `.env.example` **必须留在仓库里** —— 它只有占位值、不含真实 Key，
+#    是别人 clone 之后"知道该填哪几个变量"的唯一入口。

@@ -1,0 +1,76 @@
+# W7 主线 · Java 版效率助手配置
+# ================================
+# 【为什么 api-key 写 ${...} 而不是明文】
+#   ① 安全红线：明文 key 绝不进仓库；
+#   ② 与 Python 版对照：Python 用 `load_dotenv()` + `os.getenv("DEEPSEEK_API_KEY")`，
+#      Java 用 `spring.config.import` + `${DEEPSEEK_API_KEY}` ——
+#      **同一个 .env 文件、同一个变量名，两种取值语法**。
+#      → 这就是「契约一致、实现各写」的又一次落点。
+#
+# 【下面 spring.config.import 那一行 = Java 版的 load_dotenv()】
+#   `.env` 的格式（KEY=VALUE，`#` 注释）**恰好就是 properties 语法** →
+#   Spring Boot 可以直接把它当配置文件导入，**不需要设任何环境变量、不需要额外脚本**。
+#   `[.properties]` 是显式指定按 properties 解析（否则按扩展名 .env 猜不出格式）。
+#   `optional:` 表示文件不存在也不报错（方便别人 clone 后先跑通编译）。
+#   📌 对照表：
+#        Python:  from dotenv import load_dotenv; load_dotenv()
+#        Java  :  spring.config.import: optional:file:.env[.properties]
+#
+# 【为什么写了两个路径】—— 因为本项目有**两种摆放方式**（2026-09-29 补）：
+#   ① `java/.env`      ← 独立仓库形态：clone 下来就在项目根，开箱可用
+#   ② `week7/.env`     ← 本地学习仓库形态：java/ 嵌在 week7/ 里，与 Python 侧共用同一个 .env
+#   📌 **靠后的 import 优先级更高** → 所以 `.env` 放最后（就近的赢）。
+#      两者都不存在也不报错（`optional:`），此时走系统环境变量。
+#
+# 【为什么 base-url 指向 DeepSeek】
+#   DeepSeek 提供 **OpenAI 兼容**接口 → 用 spring-ai 的 **openai** starter，
+#   只把 base-url 换掉即可。协议是 OpenAI 的，实现是 DeepSeek 的。
+#   （W4/W6 Python 侧用 openai SDK + base_url 是同一手法）
+spring:
+  config:
+    import: optional:file:../.env[.properties],optional:file:.env[.properties]
+  application:
+    name: assistant-java
+  main:
+    web-application-type: none          # 命令行应用，不启 Tomcat
+  ai:
+    openai:
+      api-key: ${DEEPSEEK_API_KEY}
+      base-url: ${DEEPSEEK_BASE_URL}
+      chat:
+        # ⚠️ Spring AI 2.0 迁移点：`spring.ai.openai.chat.options.*` **已被标记 deprecated**
+        #    （实测 2.0.1 的 META-INF/spring-configuration-metadata.json：全库 65 个属性带
+        #     deprecation 标记，每个都带 replacement）→ 改用**去掉 `.options` 的顶层别名**：
+        #       旧 spring.ai.openai.chat.options.model        → 新 spring.ai.openai.chat.model
+        #       旧 spring.ai.openai.chat.options.temperature  → 新 spring.ai.openai.chat.temperature
+        #       旧 spring.ai.openai.chat.options.base-url     → 新 spring.ai.openai.base-url
+        #    ⚠️ **是 deprecated，不是 removed** —— 旧写法在 2.0.1 里**照样能跑**
+        #       （本项目最初"零改动跑通"就是这么来的），只是会一直吃告警、且未来大版本会删。
+        #    📌 自我纠错：我此前说"2.0 把 `.options` 段移除了" —— **那是错的**。
+        #       真相只有解出 jar 里的配置元数据才看得见，**别凭印象下结论**。
+        #    上面两行 api-key / base-url 本来就写在推荐的顶层位置（无需改动）。
+        model: ${MODEL_NAME}
+        temperature: 0.0              # 工具调用要稳定 → 温度归零（与 W6 rag.py 的 temperature=0 同口径）
+
+# 让本项目的日志能看到工具调用过程（W4 的 debug=True 在 Java 侧的对应物）
+# ⚠️ 想看「工具真的被调了」必须开 `org.springframework.ai: DEBUG` ——
+#    工具调用的执行日志（工具名 / 参数 / 返回值）打在 **框架包** 里，
+#    只开自己的包（com.laozhang.assistant）看不到。
+#    📌 这条等价于：Python 侧 `debug=True`（LangChain）或自己 print 中间 state；
+#       Java 侧没有"自己写循环"，所以**唯一能看见循环内部的入口就是框架日志**——
+#       这正是「省事 vs 可控」那个取舍的具体代价。
+logging:
+  level:
+    com.laozhang.assistant: DEBUG
+    org.springframework.ai: DEBUG
+
+# ⚠️⚠️ **第二个厂商的凭据 —— embedding 走阿里云百炼，不是 DeepSeek**
+#    W5 实测的硬事实：**DeepSeek 官方 API 没有 `/embeddings` 端点**（打过去 404）。
+#    → chat（DeepSeek，上面的 spring.ai.openai.*）与 embedding（百炼）**必须两条链路两套 key**。
+#    这是 W5 学过、W6 又复发过一次的坑 —— 第三次出现，这次直接写进配置结构里避免再犯。
+#    📌 变量名沿用 `week5/.env` / `week6/.env` 的既有命名（同一个 .env 全兼容）。
+embedding:
+  base-url: ${EMBEDDING_BASE_URL}      # https://dashscope.aliyuncs.com/compatible-mode/v1
+  api-key: ${EMBEDDING_API_KEY}
+  model: ${EMBEDDING_MODEL}            # text-embedding-v4
+  dim: 1024                            # ⚠️ 必须与 week5 建库时的维度一致，否则余弦点积会越界

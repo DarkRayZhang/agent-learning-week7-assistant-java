@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  W7 主线 · Java 版效率助手（Spring AI）
+  ======================================
+  【为什么是最小依赖，没有 spring-boot-starter-web】
+    这个项目是**命令行跑通**的助手（提醒 / 计算 / 查时间），不是 HTTP 服务。
+    → 不需要 web 容器 → 少一层启动依赖、少一堆传递依赖。
+    → 顺带：本机 ~/.m2 里**没有** web starter；spring-ai-starter-model-openai 现有 **1.1.8 + 2.0.1 两版**
+      （本项目 **2026-09-28 已升到 2.0.1**；1.1.8 只作为本机缓存里的旧版留着，不再被引用）。
+      → 不加 web 就能**纯离线构建**（依赖全在本地缓存，不依赖网络）。
+  【为什么显式声明 UTF-8】
+    本机 Maven 默认 platform encoding = **GBK**（java -version 也默认 GBK）。
+    中文源码不显式声明 → **编译期就可能乱码**，且报错信息本身会看不懂。
+    ⚠️ 这是 Java 与 Python 差异最大的一处：Python3 默认 UTF-8，Java 到处都要显式给。
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.1</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.laozhang</groupId>
+    <artifactId>assistant-java</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>assistant-java</name>
+    <description>W7 主线：Spring AI 版个人效率助手（Python/Java 双实现）</description>
+
+    <properties>
+        <java.version>17</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+        <!-- Spring AI 版本：**2.0.1（GA）**
+             ⚠️ 硬门槛：**Spring AI 2.0 不能跑在 Spring Boot 3.x 上** → 上面 parent 必须 >= 4.0
+             （连带 Spring Framework 7 + **Jackson 3**，Jackson 3 的包名从
+              `com.fasterxml.jackson` 换成 **`tools.jackson`** —— 这是本次迁移最大的一处改动） -->
+        <spring-ai.version>2.0.1</spring-ai.version>
+    </properties>
+
+    <dependencies>
+        <!-- ① 核心（含 @SpringBootApplication / 自动配置 / 日志）—— 不含 web -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+
+        <!-- ② Spring AI 的 OpenAI 兼容 starter
+             ⚠️ 关键认知：DeepSeek 是 **OpenAI 兼容**接口 → 用 openai starter，
+                靠 `spring.ai.openai.base-url` 指向 api.deepseek.com。
+                （W4/W6 里 Python 侧也是这么干的：OpenAI client + base_url 换掉）
+             → 这正是「契约 vs 实现」那把尺子：**协议是 OpenAI 的，实现是 DeepSeek 的**。 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-openai</artifactId>
+        </dependency>
+
+        <!-- ③ 测试（SpringBootTest 等）
+             ⚠️ 迁移期曾**临时注释**：`spring-boot:run` 插件绑定到 `test-compile` 阶段 →
+                会连带解析 test scope 依赖，而 `spring-boot-starter-test:4.1.1` 在本机 `.m2`
+                里还没预热 → **离线下必然 BUILD FAILURE**（实测过一次，见 v2run2）。
+                → **2026-09-28 联网预热后已恢复**；恢复后离线跑仍然通过。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- ⑤ ~~fastjson（1.x）~~ —— **2026-09-28 已移除，别再引回来**
+
+             【当初为什么差点引它】`addReminder` 要把 Map 转成 JSON 串交给模型。
+
+             【为什么最后删掉了 —— 一个动作解决三个问题】
+               `addReminder` 的返回类型从 `String`（自己 `JSON.toJSONString(map)`）改成
+               **`Map<String,Object>`**（交给框架序列化）之后：
+                 ① **`fastjson` 整个依赖不再需要** → 顺手躲掉下面这个 CVE（**这才是主因**）；
+                 ② **行为变确定** —— 框架的 `JsonParser.toJson` 对 String 有一道
+                    "内容是合法 JSON 就透传"的特判（`isValidJson`），所以**同一个方法
+                    返回值形状会随内容变**（`"60"` → 裸数字 / `"abc"` → 包引号）；
+                    返回 `Map` 则永远是 JSON 对象。⚠️ **注意：这里并没有"双重编码"**，
+                    我一开始用裸 Jackson 模拟框架、判错了，实测见 `probes/ConverterProbe.java`。
+                 ③ **类型即契约** —— `Map` = 声明"这是结构化数据"，与 Python 版返回 `dict`
+                    对齐在**类型层**，而不只是"最终 JSON 长一样"。
+
+             【躲掉的是什么】CVE-2026-16723 —— fastjson 1.x 远程代码执行，CVSS **9.0**
+               · 影响 **1.2.68 ~ 1.2.83**（我们原定用的 1.2.78 正好在范围内）
+               · **无补丁**（1.x 2024 年停维护，末版 1.2.83）· **已武器化**（2026-07-22 起在野）
+               · 攻击面**正好是这种包**：只对 **Spring Boot fat-JAR** 部署生效
+               · "gadget-free"：不靠第三方 gadget 类，仅凭 fastjson 自身反序列化逻辑即可 RCE
+                 → 传统"移除危险类"的缓解全部失效
+               📌 教训：**"配 SafeMode 缓解"是止血，"删掉依赖"才是根治** ——
+                 先问一句"这个危险的东西我到底还需要吗"。
+               ⚠️ 若项目里**真的**必须用 fastjson（如对接老代码），按推荐度选：
+                 ① 迁移 **fastjson2**（改 allowlist 模型，不受影响）
+                 ② `com.alibaba:fastjson:1.2.83_noneautotype`（编译期摘掉 AutoType）
+                 ③ 最后才是 `-Dfastjson.parser.safeMode=true`（运行时禁用 AutoType，**缓解非根治**）
+
+             【还想说 JSON 序列化怎么办】本项目**本来就有 Jackson**（spring-boot-starter 自带，
+             且 **Spring AI 内部序列化工具返回值用的就是它**）：
+               · Jackson ： `objectMapper.writeValueAsString(obj)`
+               · fastjson ： `JSON.toJSONString(obj)`
+             → 二选一即可；**同一个项目里养两套 JSON 库是技术债**（序列化行为不一致时极难查）。 -->
+    </dependencies>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <!--  为什么要显式指定 UTF-8：
+                          本机 JDK 17 的默认 file.encoding 是 **GBK**（实测：mvn -v 显示
+                          "platform encoding: GBK"）→ 源码/日志里的中文会变成 `»¹Ã»Ð´` 这种乱码。
+                          Java 18 起默认 UTF-8，17 还得自己加这一行。
+                          ⚠️ 控制台侧还要配 `chcp 65001`，两边都对齐才不乱。 -->
+                    <jvmArguments>-Dfile.encoding=UTF-8</jvmArguments>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

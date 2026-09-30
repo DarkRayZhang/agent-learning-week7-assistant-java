@@ -89,9 +89,23 @@ public class AssistantApplication {
      *    手写单例（`private` 构造 + `static final` 实例 + `getInstance()`）**能跑**，
      *    但**Spring 注入不进去** —— 而 `search_kb` 必然要注入 embedding client。
      *    `@Component` 拿到的**本来就是单例**，还白得「可注入 / 可被测试替换」两样。
-     *    ⚠️ **作用域陷阱**：若将来给它标 `@Scope("prototype")` / `@RequestScope`，
-     *    跨轮状态会**静默失效**（每轮新实例）—— 这是 Spring 侧最容易踩的一处：
-     *    **"能跑通"和"记得住"是两件事，作用域决定后者。**
+     *    ⚠️ **作用域陷阱（09-29 实测修正 —— 原文这两句都写错了）**：
+     *    原文写「给它标 `@Scope("prototype")` / `@RequestScope`，跨轮状态会静默失效」。
+     *    实测（探针日志：`week7/java-blank/probe-scope-*.log`）——**两半都不对**：
+     *      · `@Scope("prototype")` → **能跑、不报错，但也没失效**：
+     *        条数轨迹 `1 → 2 → 2`，与 singleton 对照**逐字相同**。
+     *        根因：**prototype 是"每次向容器索取"新建，不是"每次调用方法"新建** ——
+     *        而这里 `@Bean` 方法的参数**只注入一次**（`chat(..., AssistantTools tools)`），
+     *        循环里复用**同一个实例** → 状态照样跨轮。
+     *      · `@Scope("request")` → **不是静默，是启动就炸**：
+     *        `BeanCreationException: Error creating bean with name 'chat'`
+     *        `Caused by: java.lang.IllegalStateException: No Scope registered for scope name 'request'`
+     *        （本项目**非 Web 应用** → Spring 根本没注册 `request` scope）
+     *    📌 **真正会静默失效的改法 = 让"每轮重新索取"**：
+     *      循环里 `context.getBean(AssistantTools.class)`，或 `.tools(new AssistantTools())`。
+     *    📌 **教训**：连注释里的"陷阱"也要跑过才算数 —— 这条错误知识在文件里躺了一整天。
+     *    ⚠️ 但结论仍然成立（只是归因要改）：**"能跑通"和"记得住"是两件事 ——
+     *      决定后者的是「索取时刻」，不是「作用域名」。**
      */
     @Bean
     CommandLineRunner demo(ChatClient.Builder builder,AssistantTools assistantTools) {
